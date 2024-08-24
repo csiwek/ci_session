@@ -2,6 +2,7 @@ package cisession
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -12,15 +13,30 @@ import (
 )
 
 type SessionManager struct {
-	sessionFileDir string
-	sessId         string
-	mu             sync.Mutex
-	data           php_session_decoder.PhpSession
+	sessionFileDir   string
+	sessionExpirySec int
+	sessId           string
+	mu               sync.Mutex
+	data             php_session_decoder.PhpSession
 }
 
-func NewSession(sessId string) (*SessionManager, error) {
+type SessionManagerConfig struct {
+	sessionFileDir   string
+	sessionExpirySec int
+}
+
+func NewSession(sessId string, config SessionManagerConfig) (*SessionManager, error) {
 	s := new(SessionManager)
-	s.sessionFileDir = "/tmp"
+	if len(config.sessionFileDir) > 1 {
+		s.sessionFileDir = config.sessionFileDir
+	} else {
+		s.sessionFileDir = "/tmp"
+	}
+	if config.sessionExpirySec > 0 {
+		s.sessionExpirySec = config.sessionExpirySec
+	} else {
+		s.sessionExpirySec = 1800
+	}
 	if len(sessId) < 1 {
 		return s, fmt.Errorf("No Session Id provided")
 	}
@@ -37,12 +53,44 @@ func NewSession(sessId string) (*SessionManager, error) {
 	return s, nil
 }
 
+func CreateSession(config SessionManagerConfig) (*SessionManager, error) {
+	s := new(SessionManager)
+	if len(config.sessionFileDir) > 1 {
+		s.sessionFileDir = config.sessionFileDir
+	} else {
+		s.sessionFileDir = "/tmp"
+	}
+	if config.sessionExpirySec > 0 {
+		s.sessionExpirySec = config.sessionExpirySec
+	} else {
+		s.sessionExpirySec = 1800
+	}
+
+	s.sessId = randSeq()
+	s.data = php_session_decoder.PhpSession{}
+	return s, nil
+
+}
+
+func randSeq() string {
+	var letters = []rune("abcdefghijklmnopqrstuvwxyz0123456789")
+	b := make([]rune, 42)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(b)
+}
+
 func (s *SessionManager) tokenFromCookie(c *gin.Context) string {
 	cookie, err := c.Cookie("ci_session")
 	if err != nil {
 		return ""
 	}
 	return cookie
+}
+
+func (s *SessionManager) SessionId() string {
+	return s.sessId
 }
 
 func (s *SessionManager) getSerializedDataFromFile() (string, error) {
@@ -89,7 +137,7 @@ func (s *SessionManager) SetFlash(key, value string) error {
 	return nil
 }
 
-func (s *SessionManager) SetUserData(key, value string) error {
+func (s *SessionManager) SetUserData(key string, value any) error {
 	if key == "" {
 		return fmt.Errorf("SetUserData: Key cannot be empty")
 	}
@@ -99,7 +147,7 @@ func (s *SessionManager) SetUserData(key, value string) error {
 	return nil
 }
 
-func (s *SessionManager) GetUserData(key string) (string, error) {
+func (s *SessionManager) GetUserData(key string) (any, error) {
 	if key == "" {
 		return "", fmt.Errorf("GetUserData: Key cannot be empty")
 	}
@@ -107,7 +155,7 @@ func (s *SessionManager) GetUserData(key string) (string, error) {
 	defer s.mu.Unlock()
 	val, ok := s.data[key]
 	if ok {
-		return val.(string), nil
+		return val, nil
 	}
 	return "", fmt.Errorf("Not Found")
 }
@@ -146,6 +194,10 @@ func (s *SessionManager) GetFlash(key string) string {
 
 }
 
+func (s *SessionManager) Destroy() error {
+
+	return nil
+}
 func (s *SessionManager) Write() error {
 	s.data["__ci_last_regenerate"] = time.Now().Unix()
 	encoder := php_session_decoder.NewPhpEncoder(s.data)

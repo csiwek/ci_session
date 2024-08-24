@@ -13,12 +13,13 @@ type MiddlewareConfig struct {
 	SessionDir       string
 	SessionExpirySec int
 	UnauthorizedFunc func(*gin.Context, int, string)
+	AuthorizerFunc   func(*gin.Context) error
 }
 
 type GinMiddleware struct {
 	sessionFileDir   string
 	sessionExpirySec int
-	tokenLookupFunc  func(*gin.Context, string) (interface{}, error)
+	authorizerFunc   func(*gin.Context) error
 	unauthorizedFunc func(*gin.Context, int, string)
 }
 
@@ -34,6 +35,7 @@ func NewMiddleware(conf MiddlewareConfig) (*GinMiddleware, error) {
 		mw.sessionExpirySec = 1800
 	}
 	mw.unauthorizedFunc = conf.UnauthorizedFunc
+	mw.authorizerFunc = conf.AuthorizerFunc
 
 	return mw, nil
 }
@@ -55,24 +57,15 @@ func (mw *GinMiddleware) middlewareImpl(c *gin.Context) {
 		mw.unauthorizedFunc(c, http.StatusUnauthorized, "No cookie")
 		return
 	}
-	data, err := mw.getSerializedData(cookie)
+	c.Set("ci_session", cookie)
+	err := mw.authorizerFunc(c)
 	if err != nil {
-		mw.unauthorizedFunc(c, http.StatusUnauthorized, "No data for cookie "+cookie)
+		mw.unauthorizedFunc(c, http.StatusUnauthorized, fmt.Sprintf("Authorizer did not succeed %v", err))
 		return
-	}
-	sess, err := mw.decodeSerializedData(data)
-	if err != nil {
-		mw.unauthorizedFunc(c, http.StatusUnauthorized, "could not unserialize "+data)
-		return
-	}
 
-	if err == nil {
-		c.SetCookie("ci_session", sess, mw.sessionExpirySec, "/", "", false, true)
-		c.Next()
-	} else {
-		mw.unauthorizedFunc(c, http.StatusUnauthorized, "no user")
 	}
-
+	c.SetCookie("ci_session", cookie, mw.sessionExpirySec, "/", "", false, true)
+	c.Next()
 }
 
 func (mw *GinMiddleware) tokenFromCookie(c *gin.Context) string {
